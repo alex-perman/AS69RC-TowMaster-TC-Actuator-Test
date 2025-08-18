@@ -15,7 +15,7 @@
 #include <math.h>
 
 // Definitions
-#define TARGET_LOAD 30                  // SET THIS AS YOUR TARGET LOAD
+int TARGET_LOAD = 5;                     // SET THIS AS YOUR TARGET LOAD
 
 #define DIR_PIN 7                       // DIRECTION PIN ON MCU
 #define PWM_PIN 5                       // PWM DRIVE PIN ON MCU
@@ -129,6 +129,60 @@ void rampSetpointTo(double target) {
     }
 }
 
+/********* Serial Interface **************/
+String serialCmd;
+
+void parseCommand(String cmd) {
+    cmd.toLowerCase();
+    if (cmd.startsWith("kp ")) {
+        Kp = cmd.substring(3).toFloat();
+        myPID.SetTunings(Kp, Ki, Kd);
+        Serial.print("Updated Kp = "); Serial.println(Kp);
+    }
+    else if (cmd.startsWith("ki ")) {
+        Ki = cmd.substring(3).toFloat();
+        myPID.SetTunings(Kp, Ki, Kd);
+        Serial.print("Updated Ki = "); Serial.println(Ki);
+    }
+    else if (cmd.startsWith("kd ")) {
+        Kd = cmd.substring(3).toFloat();
+        myPID.SetTunings(Kp, Ki, Kd);
+        Serial.print("Updated Kd = "); Serial.println(Kd);
+    }
+    else if (cmd.startsWith("load ")) {
+        Setpoint = cmd.substring(5).toFloat();
+        Serial.print("Updated target load = "); Serial.println(Setpoint);
+    }
+    else if (cmd == "status") {
+        Serial.print("Kp="); Serial.print(Kp);
+        Serial.print(" Ki="); Serial.print(Ki);
+        Serial.print(" Kd="); Serial.print(Kd);
+        Serial.print(" Setpoint="); Serial.println(Setpoint);
+    }
+    else {
+        Serial.print("Unknown command: ");
+        Serial.println(cmd);
+    }
+}
+
+void checkSerialCommands() {
+    while (Serial.available()) {
+        char c = Serial.read();
+
+        if (c == '\n') {  // end of command
+            serialCmd.trim();
+
+            if (serialCmd.length() > 0) {
+                parseCommand(serialCmd);
+            }
+            serialCmd = "";  // reset
+        } else {
+            serialCmd += c;
+        }
+    }
+}
+/****************************************************************************/
+
 void mainLoop() {
     // Set desired load to 500 lbs, PID to actuator 
     // HOLD for X seconds
@@ -239,6 +293,7 @@ void loop() {
     }
     else {
         mainLoop();
+        checkSerialCommands();
     }
 
 }
