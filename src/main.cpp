@@ -16,6 +16,7 @@
 
 // Definitions
 int TARGET_LOAD = 5;                     // SET THIS AS YOUR TARGET LOAD
+float loadTol = 0.3;
 
 #define DIR_PIN 7                       // DIRECTION PIN ON MCU
 #define PWM_PIN 5                       // PWM DRIVE PIN ON MCU
@@ -33,10 +34,10 @@ float pounds;
 
 // PID Vars
 double Setpoint, Input, Output;
-double Kp=20.0, Ki=0.0, Kd=0.5;         // SET KP KI KD VALUES HERE
+double Kp=9.0, Ki=0.5, Kd=0.7;          // SET KP KI KD VALUES HERE
 
 double rampedSetpoint = Setpoint;       // use this instead of jumping Setpoint directly -- avoid current spikes!
-const double SETPOINT_STEP = 10;         // units per ramp interval
+double SETPOINT_STEP = 1;              // units per ramp interval
 const unsigned long SETPOINT_RAMP_MS = 50; // interval to apply step
 unsigned long lastRampMs = 0;
 
@@ -56,6 +57,8 @@ unsigned long holdStart = 0;
 unsigned long holdDuration = 2000;      // hold for Xe-3 seconds
 bool loading = true;
 int cycleCount = 0;
+bool endFlag = 0;
+static float inputEMA = 0;
 
 void scaleCalSetup() {
     Serial.println("HX711 calibration sketch");
@@ -150,8 +153,20 @@ void parseCommand(String cmd) {
         Serial.print("Updated Kd = "); Serial.println(Kd);
     }
     else if (cmd.startsWith("load ")) {
-        Setpoint = cmd.substring(5).toFloat();
+        TARGET_LOAD = cmd.substring(5).toFloat();
         Serial.print("Updated target load = "); Serial.println(Setpoint);
+    }
+    else if (cmd.startsWith("tol ")) {
+        loadTol = cmd.substring(4).toFloat();
+        Serial.print("Updated load tol = "); Serial.println(loadTol);
+    }
+    else if (cmd.startsWith("step ")) {
+        SETPOINT_STEP = cmd.substring(5).toFloat();
+        Serial.print("Updated ramp step = "); Serial.println(SETPOINT_STEP);
+    }
+    else if (cmd.startsWith("end")) {                   // End Test -- Display cycle count & goto 0lbs.
+        Setpoint = 0;
+        endFlag = 1;
     }
     else if (cmd == "status") {
         Serial.print("Kp="); Serial.print(Kp);
@@ -184,73 +199,90 @@ void checkSerialCommands() {
 /****************************************************************************/
 
 void mainLoop() {
-    // Set desired load to 500 lbs, PID to actuator 
-    // HOLD for X seconds
-    // Set desired load to 0 lbs, PID to actuator
-    // HOLD for Y seconds
-    Input = loadCell.get_units(), 10;  // Smoothed average of 5 samples
+    static unsigned long lastPID = 0;
+    if (millis() - lastPID >= 10) {     // 100Hz to agree with PID
+        lastPID = millis();
+        // Set desired load to 500 lbs, PID to actuator 
+        // HOLD for X seconds
+        // Set desired load to 0 lbs, PID to actuator
+        // HOLD for Y seconds
 
-    rampSetpointTo(Setpoint);
-    myPID.Compute();
+        // Read LoadCell once per cycle & smooth
+        float raw = loadCell.get_units();         // avoid get_units(N) big averages
+        const float alpha = 0.25;                 // 0..1; higher = less lag
+        inputEMA = alpha*raw + (1-alpha)*inputEMA;
+        Input = inputEMA;
 
-    //float ctrl = Setpoint - Input;
+        rampSetpointTo(Setpoint);
+        myPID.Compute();
 
-    Serial.print("Setpoint:");
-    Serial.print(Setpoint);
-    Serial.print(",");          // Delim
-    Serial.print("Load:");
-    Serial.print(Input);
-    Serial.print(",");
-    Serial.print("PID_Output:");
-    Serial.println(Output);
+        //float ctrl = Setpoint - Input;
 
-    // Actuator control logic
-    double error = abs(Setpoint - Input);
-
-    if (abs(Output) > 5) {  // tolerance band of ±5 lbs
-        if ((Output) > 0) {
-            forwardFlag = true;
-            digitalWrite(DIR_PIN, HIGH); //actuator.extend();
-            if (abs(Output) < maxPWMForward) { analogWrite(PWM_PIN, abs(Output)); }
-            else { analogWrite(PWM_PIN, maxPWMForward); }
+        if (endFlag == false) {
+            Serial.print("Setpoint:");
+            Serial.print(Setpoint);
+            Serial.print(",");          // Delim
+            Serial.print("Load:");
+            Serial.print(Input);
+            Serial.print(",");
+            Serial.print("PID_Output:");
+            Serial.println(Output);
         }
         else {
-            digitalWrite(DIR_PIN, LOW); //actuator.retract();
-            if (abs(Output) < maxPWMReverse) { analogWrite(PWM_PIN, abs(Output)); }
-            else { analogWrite(PWM_PIN, maxPWMReverse); }
+            Serial.print("Load:");
+            Serial.print(Input);
+            Serial.print(",");
+            Serial.print("Cycles:");
+            Serial.print(cycleCount);
         }
 
-    } else {
-        digitalWrite(DIR_PIN, HIGH);
-        analogWrite(PWM_PIN, 0); //actuator.stop();
-        delay(50);
-    }
 
-    // Hold duration logic
-    if (error < 1) {
-        if (!holdFlag) {
-            holdStart = millis();
-            holdFlag = true;
-        }
+        // Actuator control logic
+        double error = abs(Setpoint - Input);
 
-        if ((millis() - holdStart >= holdDuration)) {
-            loading = !loading;
-            Setpoint = loading ? TARGET_LOAD : 0;  // Toggle between target and 0 lbs
-            if (loading) {
-                cycleCount++;
-                Serial.print("CycleCount: ");
-                Serial.println(cycleCount);
+        if (abs(Output) > loadTol) {  // tolerance band
+            if ((Output) > 0) {
+                forwardFlag = true;
+                digitalWrite(DIR_PIN, HIGH); //actuator.extend();
+                if (abs(Output) < maxPWMForward) { analogWrite(PWM_PIN, abs(Output)); }
+                else { analogWrite(PWM_PIN, maxPWMForward); }
             }
-            holdFlag = false;
-            Serial.print("Switched setpoint to: ");
-            Serial.println(Setpoint);
+            else {
+                digitalWrite(DIR_PIN, LOW); //actuator.retract();
+                if (abs(Output) < maxPWMReverse) { analogWrite(PWM_PIN, abs(Output)); }
+                else { analogWrite(PWM_PIN, maxPWMReverse); }
+            }
+
+        } else {
+            digitalWrite(DIR_PIN, HIGH);
+            analogWrite(PWM_PIN, 0); //actuator.stop();
+            delay(50);
+        }
+
+        // Hold duration logic
+        if ((error < 1) && (endFlag == false)) {
+            if (!holdFlag) {
+                holdStart = millis();
+                holdFlag = true;
+            }
+
+            if ((millis() - holdStart >= holdDuration)) {
+                loading = !loading;
+                Setpoint = loading ? TARGET_LOAD : 0;  // Toggle between target and 0 lbs
+                if (loading) {
+                    cycleCount++; 
+                    Serial.print("CycleCount: ");
+                    Serial.println(cycleCount);
+                }
+                holdFlag = false;
+                Serial.print("Switched setpoint to: ");
+                Serial.println(Setpoint);
+            }
+        }
+        else {
+            holdFlag = false; 
         }
     }
-    else {
-        holdFlag = false; 
-    }
-    
-    delay(10);
 }
 
 
@@ -273,6 +305,7 @@ void setup() {
 
         Setpoint = TARGET_LOAD; // Initial target load (lbs)
         myPID.SetMode(AUTOMATIC);
+        myPID.SetSampleTime(10);    // 100Hz
         myPID.SetOutputLimits(-maxPWMReverse, maxPWMForward);  // Full reverse to full forward
 
         digitalWrite(SLEEP_PIN, LOW);           // RESET DRIVER
