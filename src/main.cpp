@@ -12,7 +12,6 @@
 //#include <LinearActuator.h>           //I'll do it myself LMAO
 #include <HX711.h>
 #include <PID_v1.h>
-#include <math.h>
 
 // Definitions
 int TARGET_LOAD = 5;                     // SET THIS AS YOUR TARGET LOAD
@@ -34,7 +33,7 @@ float pounds;
 
 // PID Vars
 double Setpoint, Input, Output;
-double Kp=9.0, Ki=0.5, Kd=0.7;          // SET KP KI KD VALUES HERE
+double Kp=10.5, Ki=0.05, Kd=0.25;          // SET KP KI KD VALUES HERE
 
 double rampedSetpoint = Setpoint;       // use this instead of jumping Setpoint directly -- avoid current spikes!
 double SETPOINT_STEP = 1;              // units per ramp interval
@@ -58,7 +57,9 @@ unsigned long holdDuration = 2000;      // hold for Xe-3 seconds
 bool loading = true;
 int cycleCount = 0;
 bool endFlag = 0;
+static unsigned long lastPID = 0;
 static float inputEMA = 0;
+
 
 void scaleCalSetup() {
     Serial.println("HX711 calibration sketch");
@@ -199,7 +200,6 @@ void checkSerialCommands() {
 /****************************************************************************/
 
 void mainLoop() {
-    static unsigned long lastPID = 0;
     if (millis() - lastPID >= 10) {     // 100Hz to agree with PID
         lastPID = millis();
         // Set desired load to 500 lbs, PID to actuator 
@@ -220,7 +220,7 @@ void mainLoop() {
 
         if (endFlag == false) {
             Serial.print("Setpoint:");
-            Serial.print(Setpoint);
+            Serial.print(rampedSetpoint);   // Display real time setpoint
             Serial.print(",");          // Delim
             Serial.print("Load:");
             Serial.print(Input);
@@ -233,14 +233,14 @@ void mainLoop() {
             Serial.print(Input);
             Serial.print(",");
             Serial.print("Cycles:");
-            Serial.print(cycleCount);
+            Serial.println(cycleCount);
         }
 
 
         // Actuator control logic
         double error = abs(Setpoint - Input);
 
-        if (abs(Output) > loadTol) {  // tolerance band
+        if (abs(Output) > loadTol) {  // tolerance band -- TODO this doesnt really work?????????????????
             if ((Output) > 0) {
                 forwardFlag = true;
                 digitalWrite(DIR_PIN, HIGH); //actuator.extend();
