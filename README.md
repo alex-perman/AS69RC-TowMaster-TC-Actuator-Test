@@ -13,4 +13,5 @@ _Serial Commands_
 - "step x" => Change step size for setpoint ramp (1 Step/50ms)
 - "end" ====> End test (Sets load to zero, displays final cycle count & PID parameters)
 - "status" => Displays current PID paramters
-**"x" is a number*
+
+*"x" is a number*
